@@ -11,7 +11,7 @@ from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ================= НАСТРОЙКИ (ПРОВЕРЬ ADMIN_ID!) =================
-TOKEN = "8061584127:AAHEw85svEYaASKwuUfT0XoQzUo5y4HTB4c"
+TOKEN = "8061584127:AAEU6ngT1FFD4D2eBpyhI1CSLZaqEI1wgOg"
 ADMIN_ID = 830148833 # Твой ID (узнай в @userinfobot)
 
 PLAYERS = {
@@ -180,3 +180,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
