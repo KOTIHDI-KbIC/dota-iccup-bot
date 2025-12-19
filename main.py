@@ -58,36 +58,50 @@ async def start_web_server():
 @dp.message(Command("add_match"))
 async def cmd_add_match(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
-    
     parts = message.text.split()
-    if len(parts) < 2:
-        return await message.answer("Использование: `/add_match ID` (например, /add_match 258076)")
+    if len(parts) < 2: return await message.answer("Пример: `/add_match 258076`")
     
     m_id = "".join(filter(str.isdigit, parts[1]))
-    status_msg = await message.answer(f"🔍 Парсинг матча #{m_id} через профили...")
+    status_msg = await message.answer(f"📡 Анализ текста страницы #{m_id}...")
     
     url = f"https://iccup.com/dota/details/{m_id}.html"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     
     try:
         r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code != 200:
-            return await status_msg.edit_text(f"❌ iCCup вернул ошибку {r.status_code}")
-
-        soup = BeautifulSoup(r.text, 'html.parser')
+        full_text = r.text
+        soup = BeautifulSoup(full_text, 'html.parser')
+        
         winners, losers = [], []
+        # Проверяем наличие ваших ников просто в сыром тексте страницы
+        for name, nick in PLAYERS.items():
+            if nick.lower() in full_text.lower():
+                # Если ник найден, пытаемся понять, в какой он команде
+                # Ищем ближайшее упоминание Winner/Loser
+                player_element = soup.find(string=lambda t: nick.lower() in t.lower())
+                if player_element:
+                    parent_table = player_element.find_parent('table')
+                    if parent_table:
+                        is_win = "winner" in parent_table.get_text().lower()
+                        if is_win: winners.append(name)
+                        else: losers.append(name)
+
+        winners, losers = list(set(winners)), list(set(losers))
         
-        # Ищем все ссылки на профили игроков
-        links = soup.find_all('a', href=True)
-        
-        for link in links:
-            href = link['href'].lower()
-            if '/dota/gamingprofile/' in href:
-                # Извлекаем ник из ссылки: /dota/gamingprofile/NICK.html -> NICK
-                found_nick = href.split('/')[-1].replace('.html', '').strip()
-                
-                # Ищем, в какой таблице находится эта ссылка
-                parent_table = link.find_parent('table')
-                if parent_table:
-                    # Проверяем, есть ли в этой таблице или её заголовке слово Winner
-                    table_text = parent_
+        if winners and losers:
+            pts_win, pts_lose = len(losers), len(winners)
+            for w in winners: MANUAL_ADJUSTMENTS[w] += pts_win
+            for l in losers: MANUAL_ADJUSTMENTS[l] -= pts_lose
+            save_bonuses(MANUAL_ADJUSTMENTS)
+            await status_msg.edit_text(f"✅ Матч #{m_id} засчитан!\n🏆 Победили: {winners}\n💀 Проиграли: {losers}")
+        else:
+            # Если не нашли, присылаем отладочный файл
+            with open("debug.html", "w", encoding="utf-8") as f:
+                f.write(full_text)
+            
+            from telegram import InputFile
+            await message.answer_document(types.FSInputFile("debug.html"), caption="❌ Игроки не найдены. Посмотри этот файл, виден ли там твой ник?")
+            await status_msg.delete()
+
+    except Exception as e:
+        await status_msg.edit_text(f"💥 Ошибка: {e}")
