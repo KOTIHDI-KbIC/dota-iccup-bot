@@ -7,11 +7,11 @@ from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
-from aiohttp import web  # Добавили для "обмана" Render
+from aiohttp import web
 
-# ================= НАСТРОЙКИ =================
+# ================= НАСТРОЙКИ (ПРОВЕРЬ ИХ!) =================
 TOKEN = "8061584127:AAHEw85svEYaASKwuUfT0XoQzUo5y4HTB4c" 
-ADMIN_ID = 830148833 
+ADMIN_ID = 830148833 # Твой ID из телеграма
 
 PLAYERS = {
     "Батр": "Ebu_O4karikov",
@@ -23,7 +23,7 @@ PLAYERS = {
 }
 
 BONUS_FILE = "bonuses.txt"
-# =============================================
+# ==========================================================
 
 def load_bonuses():
     if os.path.exists(BONUS_FILE):
@@ -41,63 +41,77 @@ MANUAL_ADJUSTMENTS = load_bonuses()
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 
-# --- ФЕЙКОВЫЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (ЧТОБЫ НЕ ВЫКЛЮЧАЛСЯ) ---
 async def handle(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="Bot is alive!")
 
 async def start_web_server():
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    # Render передает порт в переменной окружения PORT
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"Web server started on port {port}")
 
-# --- ЛОГИКА БОТА ---
+# --- ЛОГИКА ОБРАБОТКИ МАТЧА ---
 @dp.message(Command("add_match"))
 async def cmd_add_match(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     parts = message.text.split()
-    if len(parts) < 2: return await message.answer("Пример: `/add_match 258076`")
+    if len(parts) < 2: 
+        return await message.answer("Пример: `/add_match 258076`")
     
     m_id = "".join(filter(str.isdigit, parts[1]))
-    status_msg = await message.answer(f"📡 Анализирую матч #{m_id}...")
+    status_msg = await message.answer(f"📡 Сканирую матч #{m_id}...")
     
     url = f"https://iccup.com/dota/details/{m_id}.html"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/119.0.0.0 Safari/537.36'}
     
     try:
         r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            return await status_msg.edit_text(f"❌ Ошибка {r.status_code} на iCCup.")
+
         soup = BeautifulSoup(r.text, 'html.parser')
         winners, losers = [], []
-        all_players = []
-        
+
+        # Находим обе таблицы (Sentinel и Scourge)
         tables = soup.find_all('table')
         for table in tables:
-            is_win = "winner" in table.text.lower() or "победитель" in table.text.lower()
-            links = table.find_all('a')
-            for link in links:
-                if '/dota/gamingprofile/' in str(link.get('href')):
-                    p_nick = link.text.strip()
-                    all_players.append(p_nick)
-                    for name, nick in PLAYERS.items():
-                        if nick.lower() == p_nick.lower():
-                            if is_win: winners.append(name)
-                            else: losers.append(name)
+            # Проверяем, победила ли эта команда
+            table_text = table.text.lower()
+            is_winner_table = "winner" in table_text or "победитель" in table_text
+            
+            # Ищем наших игроков в строках этой таблицы
+            rows = table.find_all('tr')
+            for row in rows:
+                row_txt = row.text.lower()
+                for name, nick in PLAYERS.items():
+                    if nick.lower() in row_txt:
+                        if is_winner_table: winners.append(name)
+                        else: losers.append(name)
 
-        winners, losers = list(set(winners)), list(set(losers))
+        # Чистим списки
+        winners = list(set(winners))
+        losers = list(set(losers))
+        for w in winners:
+            if w in losers: losers.remove(w)
+
         if winners and losers:
             pts_win, pts_lose = len(losers), len(winners)
             for w in winners: MANUAL_ADJUSTMENTS[w] += pts_win
             for l in losers: MANUAL_ADJUSTMENTS[l] -= pts_lose
+            
             save_bonuses(MANUAL_ADJUSTMENTS)
-            await status_msg.edit_text(f"✅ Матч #{m_id} засчитан!\n🏆 +{pts_win}: {winners}\n💀 -{pts_lose}: {losers}")
+            await status_msg.edit_text(
+                f"✅ **Матч #{m_id} засчитан!**\n\n"
+                f"🏆 Победили (+{pts_win}): {', '.join(winners)}\n"
+                f"💀 Проиграли (-{pts_lose}): {', '.join(losers)}"
+            )
         else:
-            p_list = ", ".join(all_players[:10])
-            await status_msg.edit_text(f"❌ Свои не найдены.\nВижу ники: `{p_list}`")
+            await status_msg.edit_text(f"❌ Игроки не найдены или в матче не было противостояния 'свои против своих'.")
+            
     except Exception as e:
         await status_msg.edit_text(f"💥 Ошибка: {e}")
 
@@ -108,10 +122,22 @@ async def cmd_rating(message: types.Message):
     for i, (n, s) in enumerate(sorted_s, 1):
         m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
         text += f"{m} **{n}**: `{s}`\n"
+    text += "⎯"*15 + "\nЧтобы добавить: `/add_match ID`"
     await message.answer(text)
 
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        _, name, val = message.text.split()
+        if name in MANUAL_ADJUSTMENTS:
+            MANUAL_ADJUSTMENTS[name] += int(val)
+            save_bonuses(MANUAL_ADJUSTMENTS)
+            await message.answer(f"✅ Для {name} внесено {val}")
+    except: await message.answer("Пример: /stats Даур +5")
+
 async def main():
-    # Запускаем и сервер, и бота одновременно
+    # Запускаем сервер для Render и бота
     await asyncio.gather(start_web_server(), dp.start_polling(bot))
 
 if __name__ == "__main__":
