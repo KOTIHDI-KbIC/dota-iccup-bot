@@ -10,9 +10,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ================= НАСТРОЙКИ =================
-TOKEN = "В8061584127:AAHEw85svEYaASKwuUfT0XoQzUo5y4HTB4c"
-ADMIN_ID = 830148833 
+# ================= НАСТРОЙКИ (ПРОВЕРЬ ADMIN_ID!) =================
+TOKEN = "8061584127:AAHEw85svEYaASKwuUfT0XoQzUo5y4HTB4c"
+ADMIN_ID = 830148833 # Твой ID (узнай в @userinfobot)
 
 PLAYERS = {
     "Батр": "Ebu_O4karikov",
@@ -24,25 +24,36 @@ PLAYERS = {
 }
 
 BONUS_FILE = "bonuses.txt"
-HISTORY_FILE = "history.json" # Храним ID всех обработанных матчей
-# =============================================
+HISTORY_FILE = "history.json"
+# =================================================================
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 
+# --- ФУНКЦИИ РАБОТЫ С ДАННЫМИ ---
 def load_data(file, default):
     if os.path.exists(file):
-        with open(file, 'r', encoding='utf-8') as f: return json.load(f)
+        try:
+            with open(file, 'r', encoding='utf-8') as f: return json.load(f)
+        except: return default
     return default
 
 def save_data(file, data):
-    with open(file, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
+    with open(file, 'w', encoding='utf-8') as f: 
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
+# Инициализация данных
 MANUAL_ADJUSTMENTS = load_data(BONUS_FILE, {name: 0 for name in PLAYERS})
 processed_matches = load_data(HISTORY_FILE, [])
 
+# Если в загруженном файле не хватает игроков из PLAYERS, добавляем их
+for name in PLAYERS.keys():
+    if name not in MANUAL_ADJUSTMENTS:
+        MANUAL_ADJUSTMENTS[name] = 0
+
+# --- ЛОГИКА ПАРСИНГА iCCup ---
 async def process_match(m_id, is_auto=False):
-    if m_id in processed_matches: return False
+    if str(m_id) in processed_matches: return False
     
     url = f"https://iccup.com/dota/details/{m_id}.html"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
@@ -77,7 +88,7 @@ async def process_match(m_id, is_auto=False):
             for w in winners: MANUAL_ADJUSTMENTS[w] += pts_win
             for l in losers: MANUAL_ADJUSTMENTS[l] -= pts_lose
             
-            processed_matches.append(m_id)
+            processed_matches.append(str(m_id))
             save_data(BONUS_FILE, MANUAL_ADJUSTMENTS)
             save_data(HISTORY_FILE, processed_matches)
             
@@ -88,56 +99,83 @@ async def process_match(m_id, is_auto=False):
             return True
         return False
     except Exception as e:
-        print(f"Ошибка парсинга матча {m_id}: {e}")
+        print(f"Ошибка парсинга {m_id}: {e}")
         return False
 
 async def check_all_players():
-    # Проверяем историю каждого игрока по очереди
-    for display_name, nick in PLAYERS.items():
+    for name, nick in PLAYERS.items():
         url = f"https://iccup.com/dota/gamingprofile/{nick}.html"
         try:
             r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            # Ищем ссылки вида /dota/details/12345.html
-            match_ids = re.findall(r'/dota/details/(\d+)\.html', r.text)
-            if match_ids:
-                # Берем только самый свежий матч игрока
-                latest = match_ids[0]
+            ids = re.findall(r'/dota/details/(\d+)\.html', r.text)
+            if ids:
+                latest = ids[0]
                 if latest not in processed_matches:
                     await process_match(latest, is_auto=True)
-            await asyncio.sleep(2) # Пауза 2 сек, чтобы iCCup не забанил за спам
+            await asyncio.sleep(3)
         except: continue
 
-# --- КОМАНДЫ ---
+# --- КОМАНДЫ БОТА ---
 @dp.message(Command("rating"))
 async def cmd_rating(message: types.Message):
+    # Сортируем по убыванию очков
     sorted_s = sorted(MANUAL_ADJUSTMENTS.items(), key=lambda x: x[1], reverse=True)
     text = "🏆 **ТЕКУЩИЙ РЕЙТИНГ:**\n" + "⎯"*15 + "\n"
     for i, (n, s) in enumerate(sorted_s, 1):
-        text += f"{i}. **{n}**: `{s}`\n"
+        m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
+        text += f"{m} **{n}**: `{s}`\n"
+    text += "⎯"*15 + "\n`Добавить: /add_match ID`"
     await message.answer(text)
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        parts = message.text.split()
+        if len(parts) < 3: return await message.answer("Пример: `/stats Даур 5`")
+        
+        name_input, val = parts[1], int(parts[2])
+        # Ищем совпадение имени (игнорируем регистр)
+        target = next((n for n in PLAYERS.keys() if n.lower() == name_input.lower()), None)
+        
+        if target:
+            MANUAL_ADJUSTMENTS[target] += val
+            save_data(BONUS_FILE, MANUAL_ADJUSTMENTS)
+            await message.answer(f"✅ **{target}**: {'+' if val>0 else ''}{val}. Итого: `{MANUAL_ADJUSTMENTS[target]}`")
+        else:
+            await message.answer(f"❌ Игрок {name_input} не найден.")
+    except Exception as e:
+        await message.answer(f"💥 Ошибка: {e}")
 
 @dp.message(Command("add_match"))
 async def cmd_manual(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
-    m_id = "".join(filter(str.isdigit, message.text))
-    if m_id:
+    try:
+        m_id = "".join(filter(str.isdigit, message.text))
+        if not m_id: return await message.answer("Укажите ID матча.")
         if await process_match(m_id):
-            await message.answer(f"✅ Матч {m_id} добавлен вручную.")
+            await message.answer(f"✅ Матч {m_id} добавлен.")
         else:
-            await message.answer("❌ Матч уже есть в базе или там нет 'замеса'.")
+            await message.answer("❌ Матч уже был или там нет замеса своих.")
+    except: pass
 
-# --- ЗАПУСК ---
+# --- ЗАПУСК СЕРВЕРА И ШЕДУЛЕРА ---
+async def handle(request): return web.Response(text="Bot Active")
+
 async def main():
-    # Фейк сервер для Render
-    app = web.Application(); app.router.add_get('/', lambda r: web.Response(text="OK"))
+    # Веб-сервер для "пробуждения"
+    app = web.Application()
+    app.router.add_get('/', handle)
     runner = web.AppRunner(app); await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000))).start()
-    
-    # Проверка раз в 15 минут
+    port = int(os.environ.get("PORT", 10000))
+    await web.TCPSite(runner, '0.0.0.0', port).start()
+
+    # Авто-проверка каждые 15 минут
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_all_players, 'interval', minutes=15)
     scheduler.start()
-    
+
+    print("Бот запущен...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
