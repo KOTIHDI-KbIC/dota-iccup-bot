@@ -1,17 +1,18 @@
 import asyncio
 import requests
-import time
-import json
 import os
+import json
+import re
 from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8061584127:AAHEw85svEYaASKwuUfT0XoQzUo5y4HTB4c" 
-ADMIN_ID = 830148833 # Твой ID (узнай в @userinfobot)
+TOKEN = "В8061584127:AAHEw85svEYaASKwuUfT0XoQzUo5y4HTB4c"
+ADMIN_ID = 830148833 
 
 PLAYERS = {
     "Батр": "Ebu_O4karikov",
@@ -23,136 +24,121 @@ PLAYERS = {
 }
 
 BONUS_FILE = "bonuses.txt"
+HISTORY_FILE = "history.json" # Храним ID всех обработанных матчей
 # =============================================
 
-def load_bonuses():
-    if os.path.exists(BONUS_FILE):
-        try:
-            with open(BONUS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except: return {name: 0 for name in PLAYERS}
-    return {name: 0 for name in PLAYERS}
-
-def save_bonuses(bonuses):
-    with open(BONUS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(bonuses, f, ensure_ascii=False)
-
-MANUAL_ADJUSTMENTS = load_bonuses()
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 
-# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (ЧТОБЫ НЕ ЗАСЫПАЛ) ---
-async def handle(request):
-    return web.Response(text="Bot is running!")
+def load_data(file, default):
+    if os.path.exists(file):
+        with open(file, 'r', encoding='utf-8') as f: return json.load(f)
+    return default
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
+def save_data(file, data):
+    with open(file, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
 
-# --- ЛОГИКА ПАРСИНГА ---
-@dp.message(Command("add_match"))
-async def cmd_add_match(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    
-    parts = message.text.split()
-    if len(parts) < 2:
-        return await message.answer("Использование: `/add_match ID` (например, /add_match 258076)")
-    
-    m_id = "".join(filter(str.isdigit, parts[1]))
-    status_msg = await message.answer(f"📡 Глубокий поиск в матче #{m_id}...")
+MANUAL_ADJUSTMENTS = load_data(BONUS_FILE, {name: 0 for name in PLAYERS})
+processed_matches = load_data(HISTORY_FILE, [])
+
+async def process_match(m_id, is_auto=False):
+    if m_id in processed_matches: return False
     
     url = f"https://iccup.com/dota/details/{m_id}.html"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
-    }
-    
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
     try:
         r = requests.get(url, headers=headers, timeout=15)
-        html_content = r.text
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(r.text, 'html.parser')
         
-        winners, losers = [], []
+        t1_block = soup.find('div', class_='team-one')
+        t2_block = soup.find('div', class_='team-two')
+        t1_status_div = soup.find('div', class_='details-team-one')
         
-        # Перебираем все таблицы на странице
-        tables = soup.find_all('table')
-        for table in tables:
-            table_text = table.get_text().lower()
-            # Проверяем, является ли эта таблица списком победителей
-            is_winner_team = any(word in table_text for word in ["winner", "победитель", "win"])
-            
-            # Ищем ники из нашего списка внутри этой таблицы
-            for name, nick in PLAYERS.items():
-                # Ищем ник как отдельное слово в тексте таблицы
-                if nick.lower() in table_text:
-                    if is_winner_team:
-                        winners.append(name)
-                    else:
-                        losers.append(name)
+        t1_win = False
+        if t1_status_div:
+            mark = t1_status_div.find('div', class_='meta-mark')
+            if mark and 'win' in mark.get_text().lower(): t1_win = True
 
-        # Очистка списков
-        winners = list(set(winners))
-        losers = list(set(losers))
-        # Если игрок попал в оба списка (ошибка разметки), оставляем в победителях
-        for w in winners:
-            if w in losers: losers.remove(w)
+        def get_players_from_block(block):
+            found = []
+            if not block: return found
+            links = block.find_all('a', href=True)
+            for link in links:
+                href_nick = link['href'].split('/')[-1].replace('.html', '').lower()
+                for name, nick in PLAYERS.items():
+                    if nick.lower() == href_nick: found.append(name)
+            return list(set(found))
+
+        p1, p2 = get_players_from_block(t1_block), get_players_from_block(t2_block)
+        winners, losers = (p1, p2) if t1_win else (p2, p1)
 
         if winners and losers:
             pts_win, pts_lose = len(losers), len(winners)
             for w in winners: MANUAL_ADJUSTMENTS[w] += pts_win
             for l in losers: MANUAL_ADJUSTMENTS[l] -= pts_lose
             
-            save_bonuses(MANUAL_ADJUSTMENTS)
-            await status_msg.edit_text(
-                f"✅ **Матч #{m_id} засчитан!**\n\n"
-                f"🥇 Победили (+{pts_win}): {', '.join(winners)}\n"
-                f"💀 Проиграли (-{pts_lose}): {', '.join(losers)}"
-            )
-        else:
-            # Если не нашли, создаем файл отладки
-            debug_path = "debug_page.html"
-            with open(debug_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
+            processed_matches.append(m_id)
+            save_data(BONUS_FILE, MANUAL_ADJUSTMENTS)
+            save_data(HISTORY_FILE, processed_matches)
             
-            await message.answer_document(
-                types.FSInputFile(debug_path), 
-                caption=f"❌ Свои не найдены в матче #{m_id}. Отправляю файл страницы для проверки."
-            )
-            await status_msg.delete()
-
+            text = f"🎯 **Обнаружен новый матч #{m_id}!**\n\n"
+            text += f"🏆 Победили (+{pts_win}): {', '.join(winners)}\n"
+            text += f"💀 Проиграли (-{pts_lose}): {', '.join(losers)}"
+            await bot.send_message(ADMIN_ID, text)
+            return True
+        return False
     except Exception as e:
-        await status_msg.edit_text(f"💥 Ошибка: {str(e)}")
+        print(f"Ошибка парсинга матча {m_id}: {e}")
+        return False
 
+async def check_all_players():
+    # Проверяем историю каждого игрока по очереди
+    for display_name, nick in PLAYERS.items():
+        url = f"https://iccup.com/dota/gamingprofile/{nick}.html"
+        try:
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            # Ищем ссылки вида /dota/details/12345.html
+            match_ids = re.findall(r'/dota/details/(\d+)\.html', r.text)
+            if match_ids:
+                # Берем только самый свежий матч игрока
+                latest = match_ids[0]
+                if latest not in processed_matches:
+                    await process_match(latest, is_auto=True)
+            await asyncio.sleep(2) # Пауза 2 сек, чтобы iCCup не забанил за спам
+        except: continue
+
+# --- КОМАНДЫ ---
 @dp.message(Command("rating"))
 async def cmd_rating(message: types.Message):
     sorted_s = sorted(MANUAL_ADJUSTMENTS.items(), key=lambda x: x[1], reverse=True)
     text = "🏆 **ТЕКУЩИЙ РЕЙТИНГ:**\n" + "⎯"*15 + "\n"
     for i, (n, s) in enumerate(sorted_s, 1):
-        m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
-        text += f"{m} **{n}**: `{s}`\n"
-    text += "⎯"*15 + "\nДобавить матч: `/add_match ID`"
+        text += f"{i}. **{n}**: `{s}`\n"
     await message.answer(text)
 
-@dp.message(Command("stats"))
-async def cmd_stats(message: types.Message):
+@dp.message(Command("add_match"))
+async def cmd_manual(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
-    try:
-        args = message.text.split()
-        name, val = args[1], int(args[2])
-        if name in MANUAL_ADJUSTMENTS:
-            MANUAL_ADJUSTMENTS[name] += val
-            save_bonuses(MANUAL_ADJUSTMENTS)
-            await message.answer(f"✅ Обновлено: {name} {val}")
-    except:
-        await message.answer("Пример: `/stats Даур 5` или `/stats Даур -5`")
+    m_id = "".join(filter(str.isdigit, message.text))
+    if m_id:
+        if await process_match(m_id):
+            await message.answer(f"✅ Матч {m_id} добавлен вручную.")
+        else:
+            await message.answer("❌ Матч уже есть в базе или там нет 'замеса'.")
 
+# --- ЗАПУСК ---
 async def main():
-    await asyncio.gather(start_web_server(), dp.start_polling(bot))
+    # Фейк сервер для Render
+    app = web.Application(); app.router.add_get('/', lambda r: web.Response(text="OK"))
+    runner = web.AppRunner(app); await runner.setup()
+    await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000))).start()
+    
+    # Проверка раз в 15 минут
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(check_all_players, 'interval', minutes=15)
+    scheduler.start()
+    
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
