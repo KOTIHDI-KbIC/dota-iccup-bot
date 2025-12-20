@@ -1,4 +1,3 @@
-
 import asyncio
 import requests
 import os
@@ -12,8 +11,8 @@ from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8061584127:AAFVhwpbP4kKwg1tAMY7ChE8KxeSUoxA6z4"
-ADMIN_ID = 830148833  # Твой ID
+TOKEN = "ТВОЙ_ТОКЕН"
+ADMIN_ID = 000000000  # Твой ID
 
 PLAYERS = {
     "Батр": "Ebu_O4karikov",
@@ -63,7 +62,9 @@ async def process_match(m_id):
     if m_id_str in processed_matches: return False
     
     url = f"https://iccup.com/dota/details/{m_id}.html"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
     try:
         r = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -115,10 +116,22 @@ async def process_match(m_id):
 
 async def check_all():
     print(">>> [LOG] Сканирование iCCup (3 последние игры)...")
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    }
+    
     for name, nick in PLAYERS.items():
         try:
-            r = requests.get(f"https://iccup.com/dota/gamingprofile/{nick}.html", timeout=10)
-            ids = re.findall(r'/dota/details/(\d+)\.html', r.text)
+            url = f"https://iccup.com/dota/gamingprofile/{nick}.html"
+            # Принудительный запрос к внешнему адресу
+            response = requests.get(url, headers=headers, timeout=20)
+            
+            if response.status_code != 200:
+                print(f"    [ERR] Статус {response.status_code} для {name}")
+                continue
+
+            ids = re.findall(r'/dota/details/(\d+)\.html', response.text)
             if ids:
                 unique_ids = []
                 for mid in ids:
@@ -198,14 +211,12 @@ async def handle_ping(request):
     return web.Response(text="Bot is Alive")
 
 async def main():
-    # Настройка веб-сервера
     app = web.Application()
     app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app); await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     await web.TCPSite(runner, '0.0.0.0', port).start()
 
-    # Настройка планировщика
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_all, 'interval', minutes=15)
     scheduler.start()
@@ -219,4 +230,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
