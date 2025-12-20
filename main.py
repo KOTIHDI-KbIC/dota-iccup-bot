@@ -1,3 +1,4 @@
+
 import asyncio
 import requests
 import os
@@ -11,8 +12,8 @@ from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8061584127:AAFVhwpbP4kKwg1tAMY7ChE8KxeSUoxA6z4"
-ADMIN_ID = 830148833 # Вставь свой ID
+TOKEN = "ТВОЙ_ТОКЕН"
+ADMIN_ID = 000000000  # Твой ID
 
 PLAYERS = {
     "Батр": "Ebu_O4karikov",
@@ -32,6 +33,7 @@ STREAKS_FILE = "streaks.json"
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 
+# --- ФУНКЦИИ РАБОТЫ С ДАННЫМИ ---
 def load_data(file, default):
     if os.path.exists(file):
         try:
@@ -48,10 +50,6 @@ processed_matches = load_data(HISTORY_FILE, [])
 vs_stats = load_data(STATS_FILE, {name: {other: 0 for other in PLAYERS if other != name} for name in PLAYERS})
 streaks = load_data(STREAKS_FILE, {name: 0 for name in PLAYERS})
 
-for name in PLAYERS:
-    if name not in MANUAL_ADJUSTMENTS: MANUAL_ADJUSTMENTS[name] = 0
-    if name not in streaks: streaks[name] = 0
-
 def get_current_king():
     if not streaks: return None, 0
     max_val = max(streaks.values())
@@ -61,14 +59,14 @@ def get_current_king():
     return None, 0
 
 async def process_match(m_id):
-    if str(m_id) in processed_matches: return False
+    m_id_str = str(m_id)
+    if m_id_str in processed_matches: return False
+    
     url = f"https://iccup.com/dota/details/{m_id}.html"
     headers = {'User-Agent': 'Mozilla/5.0'}
-    
     try:
         r = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
-        
         t1_win_elem = soup.find('div', class_='details-team-one')
         if not t1_win_elem: return False
         t1_win = "win" in t1_win_elem.get_text().lower()
@@ -89,18 +87,16 @@ async def process_match(m_id):
         if winners and losers:
             old_king, _ = get_current_king()
             pts_win, pts_lose = len(losers), len(winners)
-
             for w in winners:
-                MANUAL_ADJUSTMENTS[w] += pts_win
-                streaks[w] += 1
+                MANUAL_ADJUSTMENTS[w] = MANUAL_ADJUSTMENTS.get(w, 0) + pts_win
+                streaks[w] = streaks.get(w, 0) + 1
                 for l in losers: vs_stats[w][l] = vs_stats[w].get(l, 0) + 1
-            
             for l in losers:
-                MANUAL_ADJUSTMENTS[l] -= pts_lose
+                MANUAL_ADJUSTMENTS[l] = MANUAL_ADJUSTMENTS.get(l, 0) - pts_lose
                 streaks[l] = 0
-
+            
             new_king, new_val = get_current_king()
-            processed_matches.append(str(m_id))
+            processed_matches.append(m_id_str)
             
             save_data(BONUS_FILE, MANUAL_ADJUSTMENTS)
             save_data(HISTORY_FILE, processed_matches)
@@ -110,35 +106,58 @@ async def process_match(m_id):
             msg = f"🎯 **Матч #{m_id} обработан!**\n\n"
             msg += f"🏆 Победили (+{pts_win}): {', '.join(winners)}\n"
             msg += f"💀 Проиграли (-{pts_lose}): {', '.join(losers)}\n"
-            msg += "⎯"*15 + "\n"
-
-            if old_king and old_king in losers:
-                msg += f"☠️ **КОРОЛЬ ПОВЕРЖЕН!**\n{old_king} потерял корону. Трон пустует...\n"
-            elif new_king and new_king != old_king:
-                msg += f"📣 **НОВЫЙ КОРОЛЬ АРЕНЫ!**\n👑 **{new_king}** захватил трон (серия: {new_val})\n"
-            elif old_king and not new_king:
-                msg += f"⚔️ **БОРЬБА ЗА ВЛАСТЬ!**\nСерии сравнялись. Корона временно снята.\n"
-
+            if old_king and old_king in losers: msg += f"\n☠️ **КОРОЛЬ ПОВЕРЖЕН!**\n{old_king} потерял корону.\n"
+            elif new_king and new_king != old_king: msg += f"\n👑 **НОВЫЙ КОРОЛЬ: {new_king}** (серия: {new_val})\n"
+            
             await bot.send_message(ADMIN_ID, msg)
             return True
-        return False
-    except Exception as e:
-        print(f"Error parsing match {m_id}: {e}")
-        return False
+    except: return False
+
+async def check_all():
+    print(">>> [LOG] Сканирование iCCup (3 последние игры)...")
+    for name, nick in PLAYERS.items():
+        try:
+            r = requests.get(f"https://iccup.com/dota/gamingprofile/{nick}.html", timeout=10)
+            ids = re.findall(r'/dota/details/(\d+)\.html', r.text)
+            if ids:
+                unique_ids = []
+                for mid in ids:
+                    if mid not in unique_ids: unique_ids.append(mid)
+                
+                for m_id in unique_ids[:3]:
+                    if m_id not in processed_matches:
+                        print(f"    [NEW] Найдена игра {m_id} у {name}")
+                        await process_match(m_id)
+                        await asyncio.sleep(2)
+            await asyncio.sleep(3)
+        except Exception as e:
+            print(f"    [ERR] Ошибка у {name}: {e}")
+            continue
+    print(">>> [LOG] Сканирование завершено.")
+
+# --- КОМАНДЫ ---
+@dp.message(Command("start", "help"))
+async def cmd_help(message: types.Message):
+    text = "📖 **СПРАВКА:**\n" + "⎯"*15 + "\n"
+    text += "📊 `/rating` — Таблица\n"
+    text += "⚔️ `/versus` — Встречи\n"
+    if message.from_user.id == ADMIN_ID:
+        text += "\n🛠 **АДМИН:**\n"
+        text += "🔍 `/check` — Начать поиск игр\n"
+        text += "📝 `/stats Имя Очки` — Правка\n"
+    await message.answer(text)
 
 @dp.message(Command("rating"))
 async def cmd_rating(message: types.Message):
     data = {n: MANUAL_ADJUSTMENTS.get(n, 0) for n in PLAYERS}
     sorted_s = sorted(data.items(), key=lambda x: x[1], reverse=True)
     king, val = get_current_king()
-    
     text = "🏆 **ТЕКУЩИЙ РЕЙТИНГ:**\n" + "⎯"*15 + "\n"
     for i, (n, s) in enumerate(sorted_s, 1):
         m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
         text += f"{m} **{n}**: `{s}`\n"
-    
     text += "⎯"*15 + "\n"
-    text += f"👑 **Король арены: {king}** ({val} побед подряд!)\n" if king else "⚔️ **Претендентов на корону пока нет**\n"
+    text += f"👑 **Король: {king}** ({val} побед подряд!)\n" if king else "⚔️ Трон пустует\n"
     await message.answer(text)
 
 @dp.message(Command("versus"))
@@ -148,56 +167,55 @@ async def cmd_versus(message: types.Message):
     for p, rivals in vs_stats.items():
         wins = [f"{r}: {c}" for r, c in rivals.items() if c > 0]
         if wins:
-            found = True
-            text += f"👤 **{p}** побеждал: {', '.join(wins)}\n"
-    await message.answer(text if found else "Истории встреч пока нет.")
+            found = True; text += f"👤 **{p}** обыграл: {', '.join(wins)}\n"
+    await message.answer(text if found else "Истории встреч нет.")
+
+@dp.message(Command("check"))
+async def cmd_check(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    await message.answer("🔍 Запускаю поиск новых игр...")
+    await check_all()
+    await message.answer("✅ Проверка окончена.")
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer(f"⛔️ Отказ. Твой ID: `{message.from_user.id}`")
-        return
+    if message.from_user.id != ADMIN_ID: return
     parts = message.text.split()
-    if len(parts) < 3:
-        await message.answer("⚠️ Инструкция: `/stats Кана -6`.")
-        return
-    name_input, val_raw = parts[1], parts[2]
+    if len(parts) < 3: return
+    name_in, val_raw = parts[1], parts[2]
     try:
         val = int(val_raw)
-        target = next((n for n in PLAYERS if n.lower() == name_input.lower()), None)
+        target = next((n for n in PLAYERS if n.lower() == name_in.lower()), None)
         if target:
             MANUAL_ADJUSTMENTS[target] += val
             if val > 0: streaks[target] += 1
             elif val < 0: streaks[target] = 0
-            save_data(BONUS_FILE, MANUAL_ADJUSTMENTS)
-            save_data(STREAKS_FILE, streaks)
-            await message.answer(f"✅ **{target}**: {val:+}\n📊 В рейтинге: `{MANUAL_ADJUSTMENTS[target]}`\n🔥 Серия: `{streaks[target]}`")
-        else:
-            await message.answer(f"👤 Игрок '{name_input}' не найден.")
-    except:
-        await message.answer("❌ Ошибка: введите число.")
+            save_data(BONUS_FILE, MANUAL_ADJUSTMENTS); save_data(STREAKS_FILE, streaks)
+            await message.answer(f"✅ {target}: {val:+}. Итого: `{MANUAL_ADJUSTMENTS[target]}`")
+    except: pass
 
-async def check_all():
-    for name, nick in PLAYERS.items():
-        try:
-            r = requests.get(f"https://iccup.com/dota/gamingprofile/{nick}.html", timeout=10)
-            ids = re.findall(r'/dota/details/(\d+)\.html', r.text)
-            if ids and ids[0] not in processed_matches: await process_match(ids[0])
-            await asyncio.sleep(5)
-        except: continue
+async def handle_ping(request):
+    return web.Response(text="Bot is Alive")
 
 async def main():
+    # Настройка веб-сервера
     app = web.Application()
-    app.router.add_get('/', lambda r: web.Response(text="Bot Alive"))
+    app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app); await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000))).start()
+    port = int(os.environ.get("PORT", 10000))
+    await web.TCPSite(runner, '0.0.0.0', port).start()
+
+    # Настройка планировщика
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_all, 'interval', minutes=15)
     scheduler.start()
-    print("Бот запущен...")
-    await dp.start_polling(bot)
+
+    print(f"--- Бот запущен (Порт: {port}) ---")
+    
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
