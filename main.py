@@ -118,7 +118,8 @@ async def check_all(quiet=True):
         for m_id in all_ids:
             await process_match(m_id)
             await asyncio.sleep(1)
-    elif not quiet: await bot.send_message(ADMIN_ID, "ℹ️ Новых игр не найдено.")
+        if not quiet: await bot.send_message(ADMIN_ID, "✅ Проверка завершена.")
+    elif not quiet: await bot.send_message(ADMIN_ID, "ℹ️ Новых игр не найдено. Проверка завершена.")
 
 @dp.message(Command("start", "help"))
 async def cmd_help(message: types.Message):
