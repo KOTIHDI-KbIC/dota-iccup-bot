@@ -135,7 +135,7 @@ async def cmd_rating(message: types.Message):
         m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
         text += f"{m} {n}: `{s}`\n"
     
-    if king:
+if king:
         # Логика подбора статуса
         if val >= 10:
             status = "🏆 ЛЕГЕНДА!"
@@ -146,7 +146,8 @@ async def cmd_rating(message: types.Message):
         else:
             status = "🔥 Хорош!"
             
-        text += f"\n👑 Король: **{king}** ({status} Серия: {val})"
+        # Формат: 👑Батр (🔥 Хорош! )
+        text += f"\n👑**{king}** ({status} )"
         
     await message.answer(text)
 
@@ -200,4 +201,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
