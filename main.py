@@ -129,11 +129,25 @@ async def cmd_help(message: types.Message):
 async def cmd_rating(message: types.Message):
     sorted_s = sorted(MANUAL_ADJUSTMENTS.items(), key=lambda x: x[1], reverse=True)
     king, val = get_current_king()
+    
     text = "🏆 **РЕЙТИНГ:**\n"
     for i, (n, s) in enumerate(sorted_s, 1):
         m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
         text += f"{m} {n}: `{s}`\n"
-    if king: text += f"\n👑 Король: {king} (🔥 {val} победы подряд)"
+    
+    if king:
+        # Логика подбора статуса
+        if val >= 10:
+            status = "🏆 ЛЕГЕНДА!"
+        elif val >= 5:
+            status = "💎 Неудержимый!"
+        elif val >= 3:
+            status = "⚡️ В ударе!"
+        else:
+            status = "🔥 Хорош!"
+            
+        text += f"\n👑 Король: **{king}** ({status} Серия: {val})"
+        
     await message.answer(text)
 
 @dp.message(Command("stats"))
@@ -186,3 +200,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
