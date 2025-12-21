@@ -188,6 +188,21 @@ async def cmd_getdata(message: types.Message):
         if os.path.exists(f):
             await message.answer_document(types.FSInputFile(f))
 
+@dp.message(Command("reset_all"))
+async def cmd_reset(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    global processed_matches, MANUAL_ADJUSTMENTS, streaks, vs_stats
+    processed_matches = []
+    MANUAL_ADJUSTMENTS = {name: 0 for name in PLAYERS}
+    streaks = {name: 0 for name in PLAYERS}
+    vs_stats = {name: {other: 0 for other in PLAYERS if other != name} for name in PLAYERS}
+    
+    # Удаляем файлы
+    for f in [HISTORY_FILE, BONUS_FILE, STATS_FILE, STREAKS_FILE]:
+        if os.path.exists(f): os.remove(f)
+        
+    await message.answer("🧹 **История и рейтинги полностью очищены!**\nТеперь нажми /check, чтобы бот увидел последние игры как новые.")
+    
 async def handle_ping(request):
     return web.Response(text="Bot Alive")
 
@@ -205,3 +220,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
