@@ -31,7 +31,6 @@ STREAKS_FILE = "streaks.json"
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 
-# --- ФУНКЦИИ РАБОТЫ С ДАННЫМИ ---
 def load_data(file, default):
     if os.path.exists(file):
         try:
@@ -171,4 +170,23 @@ async def cmd_reset(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     global processed_matches, MANUAL_ADJUSTMENTS, streaks
     processed_matches, streaks = [], {n: 0 for n in PLAYERS}
-    MANUAL_ADJUSTMENTS = {
+    MANUAL_ADJUSTMENTS = {n: 0 for n in PLAYERS}
+    for f in [HISTORY_FILE, BONUS_FILE, STREAKS_FILE, STATS_FILE]:
+        if os.path.exists(f): os.remove(f)
+    await message.answer("🧹 База очищена.")
+
+async def handle_ping(request): return web.Response(text="OK")
+
+async def main():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app); await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    await web.TCPSite(runner, '0.0.0.0', port).start()
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(check_all, 'interval', minutes=15)
+    scheduler.start()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
