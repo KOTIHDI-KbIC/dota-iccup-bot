@@ -11,8 +11,8 @@ from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8061584127:AAGHprsUOdUCXBE9yBEmWEjGmTKOlJGJh1s"
-ADMIN_ID = 830148833 # ТВОЙ_ID_ТУТ
+TOKEN = "8061584127:AAEbh0BKI9DndQkXy_V7CIpBoS8xxtRw-FU"
+ADMIN_ID = 830148833 
 
 PLAYERS = {
     "Батр": "Ebu_O4karikov",
@@ -129,26 +129,16 @@ async def cmd_help(message: types.Message):
 async def cmd_rating(message: types.Message):
     sorted_s = sorted(MANUAL_ADJUSTMENTS.items(), key=lambda x: x[1], reverse=True)
     king, val = get_current_king()
-    
     text = "🏆 **РЕЙТИНГ:**\n"
     for i, (n, s) in enumerate(sorted_s, 1):
         m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
         text += f"{m} {n}: `{s}`\n"
-    
-if king:
-        # Логика подбора статуса
-        if val >= 10:
-            status = "🏆 ЛЕГЕНДА!"
-        elif val >= 5:
-            status = "💎 Неудержимый!"
-        elif val >= 3:
-            status = "⚡️ В ударе!"
-        else:
-            status = "🔥 Хорош!"
-            
-        # Формат: 👑Батр (🔥 Хорош! )
+    if king:
+        if val >= 10: status = "🏆 ЛЕГЕНДА!"
+        elif val >= 5: status = "💎 Неудержимый!"
+        elif val >= 3: status = "⚡️ В ударе!"
+        else: status = "🔥 Хорош!"
         text += f"\n👑**{king}** ({status} )"
-        
     await message.answer(text)
 
 @dp.message(Command("stats"))
@@ -181,25 +171,4 @@ async def cmd_reset(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     global processed_matches, MANUAL_ADJUSTMENTS, streaks
     processed_matches, streaks = [], {n: 0 for n in PLAYERS}
-    MANUAL_ADJUSTMENTS = {n: 0 for n in PLAYERS}
-    for f in [HISTORY_FILE, BONUS_FILE, STREAKS_FILE, STATS_FILE]:
-        if os.path.exists(f): os.remove(f)
-    await message.answer("🧹 База очищена.")
-
-async def handle_ping(request): return web.Response(text="OK")
-
-async def main():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app); await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    await web.TCPSite(runner, '0.0.0.0', port).start()
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_all, 'interval', minutes=15)
-    scheduler.start()
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
+    MANUAL_ADJUSTMENTS = {
