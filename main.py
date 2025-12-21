@@ -134,23 +134,47 @@ async def process_match(m_id, report_to=None):
 async def check_all(report_to=None):
     if report_to: await bot.send_message(report_to, "🛰 Начинаю поиск по профилям игроков...")
     
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/119.0.0.0'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+    }
     
     for name, nick in PLAYERS.items():
         try:
             url = f"https://iccup.com/dota/gamingprofile/{nick}.html"
             r = requests.get(url, headers=headers, timeout=15)
-            ids = re.findall(r'/dota/details/(\d+)\.html', r.text)
             
+            # Новый, более мощный поиск ID матчей
+            # Ищем и через регулярки, и через поиск по ссылкам в HTML
+            ids = re.findall(r'details/(\d+)\.html', r.text)
+            
+            # Дополнительная проверка через BeautifulSoup на случай изменения ссылок
+            soup = BeautifulSoup(r.text, 'html.parser')
+            for link in soup.find_all('a', href=True):
+                if 'dota/details/' in link['href']:
+                    match = re.search(r'(\d+)\.html', link['href'])
+                    if match:
+                        ids.append(match.group(1))
+
             if ids:
                 unique_ids = []
                 for mid in ids:
                     if mid not in unique_ids: unique_ids.append(mid)
                 
-                for m_id in unique_ids[:3]:
+                found_count = 0
+                for m_id in unique_ids[:5]: # Проверяем 5 последних на всякий случай
                     if m_id not in processed_matches:
-                        await process_match(m_id, report_to)
+                        # Если матч новый, запускаем его обработку
+                        res = await process_match(m_id, report_to)
+                        if res: found_count += 1
                         await asyncio.sleep(2)
+                
+                if report_to and found_count == 0:
+                    await bot.send_message(report_to, f"ℹ️ В профиле {name} новых игр не найдено (все уже в базе или не подходят).")
+            else:
+                if report_to:
+                    await bot.send_message(report_to, f"❓ В профиле {name} вообще не найдено ссылок на матчи. Проверь ник!")
+                    
         except Exception as e:
             if report_to: await bot.send_message(report_to, f"❌ Ошибка в профиле {name}: {e}")
             continue
@@ -220,4 +244,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
