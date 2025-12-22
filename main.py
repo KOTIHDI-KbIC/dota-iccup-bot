@@ -117,8 +117,11 @@ async def check_all(quiet=True):
         for m_id in all_ids:
             await process_match(m_id)
             await asyncio.sleep(1)
-        if not quiet: await bot.send_message(ADMIN_ID, "✅ Проверка завершена.")
-    elif not quiet: await bot.send_message(ADMIN_ID, "ℹ️ Новых игр не найдено. Проверка завершена.")
+        # Это сообщение придет, если были найдены и обработаны игры
+        await bot.send_message(ADMIN_ID, "✅ Проверка новых игр завершена.")
+    elif not quiet:
+        # Это сообщение придет только если ты сам нажал /check
+        await bot.send_message(ADMIN_ID, "ℹ️ Новых игр не найдено. Проверка завершена.")
 
 @dp.message(Command("start", "help"))
 async def cmd_help(message: types.Message):
@@ -188,7 +191,6 @@ async def main():
     port = int(os.environ.get("PORT", 10000))
     await web.TCPSite(runner, '0.0.0.0', port).start()
     scheduler = AsyncIOScheduler()
-    # Установили интервал 1 минута
     scheduler.add_job(check_all, 'interval', minutes=1)
     scheduler.start()
     await dp.start_polling(bot)
