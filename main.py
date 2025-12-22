@@ -132,12 +132,16 @@ async def cmd_rating(message: types.Message):
     for i, (n, s) in enumerate(sorted_s, 1):
         m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
         text += f"{m} {n}: `{s}`\n"
+    
     if king:
         if val >= 10: status = "🏆 ЛЕГЕНДА!"
         elif val >= 5: status = "💎 Неудержимый!"
         elif val >= 3: status = "⚡️ В ударе!"
         else: status = "🔥 Хорош!"
         text += f"\n👑**{king}** ({status} )"
+    else:
+        text += f"\n👑 Трон пустует... (Нужна серия от 2 побед)"
+        
     await message.answer(text)
 
 @dp.message(Command("stats"))
@@ -184,7 +188,8 @@ async def main():
     port = int(os.environ.get("PORT", 10000))
     await web.TCPSite(runner, '0.0.0.0', port).start()
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_all, 'interval', minutes=15)
+    # Установили интервал 1 минута
+    scheduler.add_job(check_all, 'interval', minutes=1)
     scheduler.start()
     await dp.start_polling(bot)
 
