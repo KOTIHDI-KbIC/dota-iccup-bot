@@ -29,6 +29,7 @@ HISTORY_FILE = "history.json"
 STATS_FILE = "vs_stats.json"
 STREAKS_FILE = "streaks.json"
 USERS_FILE = "users.json"
+DAILY_FILE = "daily_stats.json" # Новый файл для сессий
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
@@ -50,6 +51,7 @@ processed_matches = load_data(HISTORY_FILE, [])
 vs_stats = load_data(STATS_FILE, {name: {other: 0 for other in PLAYERS if other != name} for name in PLAYERS})
 streaks = load_data(STREAKS_FILE, {name: 0 for name in PLAYERS})
 user_ids = load_data(USERS_FILE, {})
+daily_points = load_data(DAILY_FILE, {name: 0 for name in PLAYERS}) # Очки сессии
 
 def get_current_king():
     if not streaks: return None, 0
@@ -108,13 +110,15 @@ async def process_match(m_id):
         winners, losers = (p1, p2) if t1_win else (p2, p1)
         pts_win, pts_lose = len(losers), len(winners)
 
+        # Обновляем ОБЩИЙ рейтинг и ДНЕВНУЮ сессию
         for w in winners:
-            MANUAL_ADJUSTMENTS[w] = MANUAL_ADJUSTMENTS.get(w, 0) + pts_win
+            MANUAL_ADJUSTMENTS[w] += pts_win
+            daily_points[w] = daily_points.get(w, 0) + pts_win
             streaks[w] = streaks.get(w, 0) + 1
-            for l in losers:
-                vs_stats[w][l] = vs_stats[w].get(l, 0) + 1
+            for l in losers: vs_stats[w][l] = vs_stats[w].get(l, 0) + 1
         for l in losers:
-            MANUAL_ADJUSTMENTS[l] = MANUAL_ADJUSTMENTS.get(l, 0) - pts_lose
+            MANUAL_ADJUSTMENTS[l] -= pts_lose
+            daily_points[l] = daily_points.get(l, 0) - pts_lose
             streaks[l] = 0
 
         processed_matches.append(m_id_str)
@@ -122,6 +126,7 @@ async def process_match(m_id):
         save_data(HISTORY_FILE, processed_matches)
         save_data(STREAKS_FILE, streaks)
         save_data(STATS_FILE, vs_stats)
+        save_data(DAILY_FILE, daily_points)
 
         await notify_players(winners, losers, m_id, pts_win, pts_lose)
         return True
@@ -155,20 +160,20 @@ async def cmd_start(message: types.Message):
         return
     name = args[1].capitalize()
     if name not in PLAYERS:
-        await message.answer("❌ Тебя нет в списке.")
+        await message.answer("❌ Тебя нет в списке участников.")
         return
     if name not in user_ids and len(user_ids) >= 6:
         await message.answer("🚫 Лимит 6 человек исчерпан.")
         return
     user_ids[name] = message.from_user.id
     save_data(USERS_FILE, user_ids)
-    await message.answer(f"✅ {name}, ты зарегистрирован!")
+    await message.answer(f"✅ {name}, ты в системе! Ожидай уведомлений.")
 
 @dp.message(Command("rating"))
 async def cmd_rating(message: types.Message):
     sorted_s = sorted(MANUAL_ADJUSTMENTS.items(), key=lambda x: x[1], reverse=True)
     king, val = get_current_king()
-    text = "🏆 **РЕЙТИНГ:**\n"
+    text = "🏆 **ОБЩИЙ РЕЙТИНГ:**\n"
     for i, (n, s) in enumerate(sorted_s, 1):
         m = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else "🔹"
         text += f"{m} {n}: `{s}`\n"
@@ -178,7 +183,6 @@ async def cmd_rating(message: types.Message):
         elif val >= 3: status = "⚡️ В ударе!"
         else: status = "🔥 Хорош!"
         text += f"\n👑 **{king}** ({status})"
-    else: text += f"\n👑 Трон пустует..."
     await message.answer(text)
 
 @dp.message(Command("stats"))
@@ -186,7 +190,34 @@ async def cmd_stats(message: types.Message):
     args = message.text.split()
     name = args[1].capitalize() if len(args) > 1 else ""
     if name not in PLAYERS: return await message.answer("Пример: `/stats Батр`")
-    await message.answer(f"📊 **{name}**\n💰 Очки: `{MANUAL_ADJUSTMENTS.get(name,0)}`\n🔥 Серия: `{streaks.get(name,0)}`")
+    await message.answer(f"📊 **СТАТИСТИКА: {name}**\n💰 Очки: `{MANUAL_ADJUSTMENTS.get(name,0)}`\n🔥 Серия: `{streaks.get(name,0)}`")
+
+# --- КОМАНДЫ СЕССИИ ---
+@dp.message(Command("session_start"))
+async def cmd_sess_start(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    global daily_points
+    daily_points = {name: 0 for name in PLAYERS}
+    save_data(DAILY_FILE, daily_points)
+    await message.answer("🚀 **Игровой вечер начался!**\nДневной рейтинг сброшен. Погнали! 🔥")
+
+@dp.message(Command("session_stats"))
+async def cmd_sess_stats(message: types.Message):
+    sorted_d = sorted(daily_points.items(), key=lambda x: x[1], reverse=True)
+    text = "📅 **РЕЗУЛЬТАТЫ ЗА СЕГОДНЯ:**\n\n"
+    for i, (n, s) in enumerate(sorted_d, 1):
+        smile = "🔥" if s > 0 else "📉" if s < 0 else "⏳"
+        text += f"{i}. {n}: `{s}` {smile}\n"
+    await message.answer(text)
+
+# --- АДМИН КОМАНДЫ ---
+@dp.message(Command("users"))
+async def cmd_users(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    if not user_ids: return await message.answer("Список пуст.")
+    text = "👥 **ЗАРЕГИСТРИРОВАНЫ:**\n"
+    for n, i in user_ids.items(): text += f"• {n} (ID: `{i}`)\n"
+    await message.answer(text)
 
 @dp.message(Command("add"))
 async def cmd_add(message: types.Message):
@@ -208,39 +239,34 @@ async def cmd_manual_check(message: types.Message):
 @dp.message(Command("reset_all"))
 async def cmd_reset(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
-    global processed_matches, MANUAL_ADJUSTMENTS, streaks, user_ids
+    global processed_matches, MANUAL_ADJUSTMENTS, streaks, user_ids, daily_points
     processed_matches, user_ids = [], {}
     MANUAL_ADJUSTMENTS = {n: 0 for n in PLAYERS}
     streaks = {n: 0 for n in PLAYERS}
-    for f in [HISTORY_FILE, BONUS_FILE, STREAKS_FILE, STATS_FILE, USERS_FILE]:
+    daily_points = {n: 0 for n in PLAYERS}
+    for f in [HISTORY_FILE, BONUS_FILE, STREAKS_FILE, STATS_FILE, USERS_FILE, DAILY_FILE]:
         if os.path.exists(f): os.remove(f)
-    await message.answer("🧹 База полностью очищена.")
-
-@dp.message(Command("clear_users"))
-async def cmd_clear_users(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    global user_ids
-    user_ids = {}
-    if os.path.exists(USERS_FILE): os.remove(USERS_FILE)
-    await message.answer("🗑 Список регистраций очищен.")
+    await message.answer("☢️ **ВСЯ БАЗА ОБНУЛЕНА!**")
 
 # --- УПРАВЛЕНИЕ МЕНЮ ---
 async def set_main_menu(bot: Bot):
+    # Для всех
     user_commands = [
-        BotCommand(command="rating", description="🏆 Таблица рейтинга"),
+        BotCommand(command="rating", description="🏆 Общий рейтинг"),
+        BotCommand(command="session_stats", description="📅 Результаты за сегодня"),
         BotCommand(command="stats", description="📊 Моя статистика"),
         BotCommand(command="start", description="🔑 Регистрация")
     ]
     await bot.set_my_commands(user_commands)
-    
+    # Для тебя
     admin_commands = user_commands + [
+        BotCommand(command="session_start", description="🆕 Начать новую сессию"),
+        BotCommand(command="users", description="👥 Кто зарегистрирован"),
         BotCommand(command="check", description="🔍 Поиск новых игр"),
         BotCommand(command="add", description="💰 Изменить очки"),
-        BotCommand(command="clear_users", description="🧹 Очистить игроков"),
         BotCommand(command="reset_all", description="☢️ СБРОСИТЬ ВСЁ")
     ]
-    try:
-        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+    try: await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
     except: pass
 
 async def handle_ping(request): return web.Response(text="OK")
@@ -256,7 +282,8 @@ async def main():
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_all, 'interval', minutes=1)
     scheduler.start()
-    try: await bot.send_message(ADMIN_ID, f"🚀 Бот запущен! База: {len(user_ids)}/6")
+    
+    try: await bot.send_message(ADMIN_ID, f"🚀 Бот запущен!\n👥 В базе: {len(user_ids)}/6")
     except: pass
     await dp.start_polling(bot)
 
